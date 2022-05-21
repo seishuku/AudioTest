@@ -235,7 +235,7 @@ int main(int argc, char **argv)
 
     while(!Done)
     {
-        if(_kbhit())
+        if(kbhit())
         {
             switch(getch())
             {
