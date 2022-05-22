@@ -1,9 +1,11 @@
 #ifndef __AUDIO_H__
 #define __AUDIO_H__
 
+#define SAMPLE_RATE 44100
+
 typedef struct
 {
-    uint8_t *data;
+    int16_t *data;
     uint32_t pos, len;
     bool looping;
 } Sample_t;

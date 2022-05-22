@@ -1,3 +1,5 @@
+// TODO: Sounds need positional and ID info for tracking through the channels.
+
 #include <portaudio.h>
 #include <conio.h>
 #include <stdio.h>
@@ -66,14 +68,12 @@ int paCallback(const void *inputBuffer, void *outputBuffer, unsigned long frames
         // Transfer/process what we can.
         for(uint32_t j=0;j<remaining_data;j++)
         {
-            int16_t input_sample=((int16_t *)channel->data)[channel->pos+j];
-            int16_t *output_sampleL=out+0;
-            int16_t *output_sampleR=out+1;
+            int16_t input_sample=channel->data[channel->pos+j];
+            int16_t output_sampleL=*out+0;
+            int16_t output_sampleR=*out+1;
 
-            *output_sampleL=MixSamples(*output_sampleL, input_sample);
-            *output_sampleR=MixSamples(*output_sampleR, input_sample);
-
-            out+=2;
+            *out++=MixSamples(output_sampleL, input_sample);
+            *out++=MixSamples(output_sampleR, input_sample);
         }
 
         // Advance the sample position by what we've used, next time around will take another chunk.
@@ -143,7 +143,7 @@ int main(int argc, char **argv)
     outputParameters.hostApiSpecificStreamInfo=NULL;
 
     // Open audio stream
-    if(Pa_OpenStream(&stream, NULL, &outputParameters, 22050, 128, paClipOff, paCallback, NULL)!=paNoError)
+    if(Pa_OpenStream(&stream, NULL, &outputParameters, SAMPLE_RATE, 128, paClipOff, paCallback, NULL)!=paNoError)
     {
         fprintf(stderr, "Unable to open PortAudio Stream.\n");
         Pa_Terminate();
@@ -159,16 +159,16 @@ int main(int argc, char **argv)
     }
 
     // Load up some wave sounds
-    if(!LoadStaticSound("levelup.wav", &TestSound1))
+    if(!LoadStaticSound("squeeze-toy-1.wav", &TestSound1))
         return -1;
 
-    if(!LoadStaticSound("line.wav", &TestSound2))
+    if(!LoadStaticSound("bang_6.wav", &TestSound2))
         return -1;
 
-    if(!LoadStaticSound("line4.wav", &TestSound3))
+    if(!LoadStaticSound("glass_breaking_2.wav", &TestSound3))
         return -1;
 
-    if(!LoadStaticSound("rotate.wav", &TestSound4))
+    if(!LoadStaticSound("beep-3.wav", &TestSound4))
         return -1;
 
     // Loop around, waiting for a key press
