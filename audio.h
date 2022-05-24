@@ -7,7 +7,7 @@ typedef struct
 {
     int16_t *data;
     uint32_t pos, len;
-    bool looping;
+    float pan[2];
 } Sample_t;
 
 bool LoadStaticSound(char *Filename, Sample_t *Sample);

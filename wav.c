@@ -134,6 +134,8 @@ bool LoadStaticSound(char *Filename, Sample_t *Sample)
     Sample->data=resampled;
     Sample->len=outputSize;
     Sample->pos=0;
+    Sample->pan[0]=1.0f;
+    Sample->pan[1]=1.0f;
 
     return 1;
 }
