@@ -13,18 +13,48 @@
       <UniqueIdentifier>{67DA6AB6-F800-4c08-8B7A-83BB121AAD01}</UniqueIdentifier>
       <Extensions>rc;ico;cur;bmp;dlg;rc2;rct;bin;rgs;gif;jpg;jpeg;jpe;resx;tiff;tif;png;wav;mfcribbon-ms</Extensions>
     </Filter>
+    <Filter Include="Header Files\math">
+      <UniqueIdentifier>{3c7743da-0787-4e53-aec6-edb19a5a4c8f}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Source Files\math">
+      <UniqueIdentifier>{a2a1a87a-54fb-4934-ba03-9b1833fe3137}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Header Files\system">
+      <UniqueIdentifier>{411597a1-5b41-4764-a239-69898e8b46ae}</UniqueIdentifier>
+    </Filter>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="AudioTest.c">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="wav.c">
+    <ClCompile Include="math\math.c">
+      <Filter>Source Files\math</Filter>
+    </ClCompile>
+    <ClCompile Include="math\fft.c">
+      <Filter>Source Files\math</Filter>
+    </ClCompile>
+    <ClCompile Include="hrtf.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="wave.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="audio.c">
       <Filter>Source Files</Filter>
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="audio.h">
       <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="math\math.h">
+      <Filter>Header Files\math</Filter>
+    </ClInclude>
+    <ClInclude Include="math\fft.h">
+      <Filter>Header Files\math</Filter>
+    </ClInclude>
+    <ClInclude Include="system\system.h">
+      <Filter>Header Files\system</Filter>
     </ClInclude>
   </ItemGroup>
 </Project>

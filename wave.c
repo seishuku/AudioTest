@@ -2,11 +2,10 @@
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include "system/system.h"
+#include "math/math.h"
+#include "math/fft.h"
 #include "audio.h"
-
-#ifndef FREE
-#define FREE(p) { if(p) { free(p); p=NULL; } }
-#endif
 
 #define RIFF_MAGIC ('R'|('I'<<8)|('F'<<16)|('F'<<24))
 #define WAVE_MAGIC ('W'|('A'<<8)|('V'<<16)|('E'<<24))
@@ -14,7 +13,7 @@
 #define DATA_MAGIC ('d'|('a'<<8)|('t'<<16)|('a'<<24))
 
 // Simple resampling function, based off of what id Software used in Quake, seems to work well enough.
-void Resample(void *in, int inwidth, int inrate, int inlength, int16_t *out, int outrate)
+void Resample(void *in, int inwidth, int inrate, int inchannel, int inlength, int16_t *out, int outrate)
 {
     float stepscale=(float)inrate/SAMPLE_RATE;
 
@@ -22,22 +21,45 @@ void Resample(void *in, int inwidth, int inrate, int inlength, int16_t *out, int
 
     for(uint32_t i=0, samplefrac=0;i<outcount; i++, samplefrac+=(int32_t)(stepscale*256))
     {
-        int32_t sample;
+        int32_t samplel=0, sampler=0;
         int32_t srcsample=samplefrac>>8;
 
         if(inwidth==2)
-            sample=((int16_t *)in)[srcsample];
+        {
+            if(inchannel==2)
+            {
+                samplel=((int16_t *)in)[2*srcsample+0];
+                sampler=((int16_t *)in)[2*srcsample+1];
+            }
+            else
+                samplel=((int16_t *)in)[srcsample];
+        }
         else
-            sample=(int16_t)(((int8_t *)in)[srcsample]-128)<<8;
+        {
+            if(inchannel==2)
+            {
+                samplel=(int16_t)(((int8_t *)in)[2*srcsample+0]-128)<<8;
+                sampler=(int16_t)(((int8_t *)in)[2*srcsample+1]-128)<<8;
+            }
+            else
+                samplel=(int16_t)(((int8_t *)in)[srcsample]-128)<<8;
+        }
 
-        out[i]=sample;
+        if(inchannel==2)
+        {
+            out[2*i+0]=samplel;
+            out[2*i+1]=sampler;
+        }
+        else
+            out[i]=samplel;
     }
 }
 
 // Load a WAVE sound file, this should search for chunks, not blindly load.
-// This also will only accept PCM audio streams and mono, ideally stereo isn't needed
-// because most sound effcts will be panned/spatialized into stereo for "3D" audio.
-bool LoadStaticSound(char *Filename, Sample_t *Sample)
+// This also will only accept PCM audio streams and stereo, ideally stereo isn't needed
+// because most sound effcts will be panned/spatialized into stereo for "3D" audio,
+// but stereo is needed for the HRTF samples.
+bool Audio_LoadStatic(char *Filename, Sample_t *Sample)
 {
     FILE *stream=NULL;
     uint32_t riff_magic, wave_magic, fmt_magic, data_magic;
@@ -85,9 +107,9 @@ bool LoadStaticSound(char *Filename, Sample_t *Sample)
     fseek(stream, sizeof(uint16_t), SEEK_CUR);          // nBlockAlign
     fread(&sample, sizeof(uint16_t), 1, stream);        // wBitsPerSample
 
-    if(format!=1&&channels!=1)
+    if(format!=1&&channels>2)
     {
-        // Only support PCM streams and mono
+        // Only support PCM streams and stereo
         fclose(stream);
         return 0;
     }
@@ -115,11 +137,12 @@ bool LoadStaticSound(char *Filename, Sample_t *Sample)
     fclose(stream);
 
     length/=sample>>3;
+    length/=channels;
 
     // Covert to match primary buffer sampling rate
     uint32_t outputSize=(uint32_t)(length/((float)frequency/SAMPLE_RATE));
 
-    int16_t *resampled=(int16_t *)malloc(sizeof(int16_t)*outputSize);
+    int16_t *resampled=(int16_t *)malloc(sizeof(int16_t)*outputSize*channels);
 
     if(resampled==NULL)
     {
@@ -127,15 +150,15 @@ bool LoadStaticSound(char *Filename, Sample_t *Sample)
         return 0;
     }
 
-    Resample(buffer, sample>>3, frequency, length, resampled, SAMPLE_RATE);
+    Resample(buffer, sample>>3, frequency, channels, length, resampled, SAMPLE_RATE);
 
     FREE(buffer);
 
     Sample->data=resampled;
     Sample->len=outputSize;
     Sample->pos=0;
-    Sample->pan[0]=1.0f;
-    Sample->pan[1]=1.0f;
+    Sample->channels=(uint8_t)channels;
+    Vec3_Sets(Sample->xyz, 0.0f);
 
     return 1;
 }
