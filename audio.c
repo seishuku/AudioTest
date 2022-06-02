@@ -75,20 +75,30 @@ int16_t MixSamples(int16_t a, int16_t b, uint8_t volume)
 {
     b=(b*volume)/MAX_VOLUME;
 
-    if(a<0&&b<0)
-        return (a+b)-((a*b)/INT16_MIN);
-    else if(a>0&&b>0)
-        return (a+b)-((a*b)/INT16_MAX);
+    //if(a<0&&b<0)
+    //    return (a+b)-((a*b)/INT16_MIN);
+    //else if(a>0&&b>0)
+    //    return (a+b)-((a*b)/INT16_MAX);
 
+    // Why isn't this clipping now, it was before?
     return a+b;
 }
 
+// HRTF samples and buffers for intepolated values
 extern HRTF_t hrtf[AZIMUTH_CNT];
+Complex_t hrtf_intepolate_l[FFT_SAMPLES];
+Complex_t hrtf_intepolate_r[FFT_SAMPLES];
 
+// Incoming sample in time domain
 Complex_t sample_fft_time[FFT_SAMPLES];
+// Incoming sample in freq domain
 Complex_t sample_fft_freq[FFT_SAMPLES];
+
+// Convolved stereo sample in freq domain
 Complex_t sample_fft_freq_l[FFT_SAMPLES];
 Complex_t sample_fft_freq_r[FFT_SAMPLES];
+
+// Convolved stereo sample in time domain
 Complex_t sample_fft_time_l[FFT_SAMPLES];
 Complex_t sample_fft_time_r[FFT_SAMPLES];
 
@@ -118,6 +128,7 @@ int paCallback(const void *inputBuffer, void *outputBuffer, unsigned long frames
         if(remaining_data>framesPerBuffer)
             remaining_data=framesPerBuffer;
 
+        // FFT the incoming audio sample from time to frequency domain
         for(uint32_t j=0;j<FFT_SAMPLES;j++)
         {
             if(j<remaining_data)
@@ -130,27 +141,50 @@ int paCallback(const void *inputBuffer, void *outputBuffer, unsigned long frames
 
         fft(sample_fft_time, sample_fft_freq, FFT_SAMPLES, 1);
 
+        // Get the degree from listener to sound producer
         float degree=fmodf(360.0f-(Spatialize(channel->xyz, NULL, NULL)-90.0f), 360.0f);
 
-        int azimuth=abs((int)(degree/5));
-        HRTF_t *data=&hrtf[azimuth];
+        // Find the nearest upper and lower degrees and intepolate between them (is this really needed?)
+        int azimuth1=abs((int)floor(degree/AZIMUTH_INCREMENT_DEGREES));
+        int azimuth2=abs((int)ceil(degree/AZIMUTH_INCREMENT_DEGREES));
+        float delta=(degree/AZIMUTH_INCREMENT_DEGREES)-azimuth1;
 
         for(uint32_t j=0;j<FFT_SAMPLES;j++)
         {
-            sample_fft_freq_l[j].r=(sample_fft_freq[j].r*data->hrtf_l[j].r)-(sample_fft_freq[j].i*data->hrtf_l[j].i);
-            sample_fft_freq_l[j].i=(sample_fft_freq[j].r*data->hrtf_l[j].i)+(sample_fft_freq[j].i*data->hrtf_l[j].r);
+            HRTF_t *data1=&hrtf[azimuth1];
+            HRTF_t *data2=&hrtf[azimuth2%AZIMUTH_CNT];
 
-            sample_fft_freq_r[j].r=(sample_fft_freq[j].r*data->hrtf_r[j].r)-(sample_fft_freq[j].i*data->hrtf_r[j].i);
-            sample_fft_freq_r[j].i=(sample_fft_freq[j].r*data->hrtf_r[j].i)+(sample_fft_freq[j].i*data->hrtf_r[j].r);
+            Lerp(data1->hrtf_l[j].r, data2->hrtf_l[j].r, delta, &hrtf_intepolate_l[j].r);
+            Lerp(data1->hrtf_l[j].i, data2->hrtf_l[j].i, delta, &hrtf_intepolate_l[j].i);
+
+            Lerp(data1->hrtf_r[j].r, data2->hrtf_r[j].r, delta, &hrtf_intepolate_r[j].r);
+            Lerp(data1->hrtf_r[j].i, data2->hrtf_r[j].i, delta, &hrtf_intepolate_r[j].i);
         }
 
+        // Convolve the mono audio sample in frequency domain with the HRTF sample in frequency domain
+        for(uint32_t j=0;j<FFT_SAMPLES;j++)
+        {
+            sample_fft_freq_l[j].r=(sample_fft_freq[j].r*hrtf_intepolate_l[j].r)-(sample_fft_freq[j].i*hrtf_intepolate_l[j].i);
+            sample_fft_freq_l[j].i=(sample_fft_freq[j].r*hrtf_intepolate_l[j].i)+(sample_fft_freq[j].i*hrtf_intepolate_l[j].r);
+
+            sample_fft_freq_r[j].r=(sample_fft_freq[j].r*hrtf_intepolate_r[j].r)-(sample_fft_freq[j].i*hrtf_intepolate_r[j].i);
+            sample_fft_freq_r[j].i=(sample_fft_freq[j].r*hrtf_intepolate_r[j].i)+(sample_fft_freq[j].i*hrtf_intepolate_r[j].r);
+        }
+
+        // Take the convoluted sample from freqency back into time domain
         fft(sample_fft_freq_l, sample_fft_time_l, FFT_SAMPLES, -1);
         fft(sample_fft_freq_r, sample_fft_time_r, FFT_SAMPLES, -1);
 
+        // Mix out the time domain sample into the output buffer.
+        // This works, but not well... Needs a better mix function.
         for(uint32_t j=0;j<remaining_data;j++)
         {
-            *out++=(int16_t)((sample_fft_time_l[j].r/FFT_SAMPLES)*INT16_MAX);
-            *out++=(int16_t)((sample_fft_time_r[j].r/FFT_SAMPLES)*INT16_MAX);
+            int16_t input_sampleL=(int16_t)((sample_fft_time_l[j].r/FFT_SAMPLES)*INT16_MAX);
+            int16_t input_sampleR=(int16_t)((sample_fft_time_r[j].r/FFT_SAMPLES)*INT16_MAX);
+            int16_t output_sampleL=*out+0;
+            int16_t output_sampleR=*out+1;
+            *out++=MixSamples(output_sampleL, input_sampleL, MAX_VOLUME);
+            *out++=MixSamples(output_sampleR, input_sampleR, MAX_VOLUME);
         }
 
         // Transfer/process what we can.

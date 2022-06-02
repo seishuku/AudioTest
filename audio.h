@@ -2,7 +2,7 @@
 #define __AUDIO_H__
 
 #define SAMPLE_RATE 44100
-#define NUM_SAMPLES 2048
+#define NUM_SAMPLES 4096
 
 typedef struct
 {
@@ -21,7 +21,7 @@ void Audio_Destroy(void);
 #define AZIMUTH_CNT 72
 #define AZIMUTH_INCREMENT_DEGREES 5
 
-#define FFT_SAMPLES 4096
+#define FFT_SAMPLES (NUM_SAMPLES*4)
 
 typedef struct
 {

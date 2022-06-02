@@ -28,15 +28,19 @@ int main(int argc, char **argv)
     if(!Audio_LoadStatic("zombie_idle.wav", &TestSound1))
         return -1;
 
-    if(!Audio_LoadStatic("hk_chatter.wav", &TestSound2))
+    if(!Audio_LoadStatic("pinky_idle.wav", &TestSound2))
         return -1;
+
+    TestSound2.xyz[0]=0.01f;
+    TestSound2.xyz[1]=0.0f;
+    TestSound2.xyz[2]=-1.0f;
 
     if(!Audio_LoadStatic("pinky_idle.wav", &TestSound3))
         return -1;
 
-    TestSound3.xyz[0]=0.0f;
+    TestSound3.xyz[0]=0.01f;
     TestSound3.xyz[1]=0.0f;
-    TestSound3.xyz[2]=-1.0f;
+    TestSound3.xyz[2]=1.0f;
 
     if(!Audio_LoadStatic("beep-3.wav", &TestSound4))
         return -1;
@@ -62,7 +66,7 @@ int main(int argc, char **argv)
                     break;
 
                 case '1':
-                    Audio_PlaySample(&TestSound1, false);
+                    Audio_PlaySample(&TestSound1, true);
                     break;
 
                 case '2':
