@@ -19,300 +19,258 @@ PaStream *stream=NULL;
 
 typedef struct
 {
-    int16_t *data;
-    uint32_t pos, len;
-    bool looping;
-    float *xyz;
+	int16_t *data;
+	uint32_t pos, len;
+	bool looping;
+	float *xyz;
 } Channel_t;
 
 vec3 Zero={ 0.0f, 0.0f, 0.0f };
 
 Channel_t channels[MAX_CHANNELS];
 
-// Position spatializion/stereo separation.
-// Largely base off of what idSoftware used in the Quake engined games.
-vec3 listener_origin={ 0.0f, 0.0f, 0.0f };
-vec3 listener_right={ 1.0f, 0.0f, 0.0f };
-
-void Audio_SetListenerOrigin(vec3 pos, vec3 right)
-{
-    Vec3_Setv(listener_origin, pos);
-    Vec3_Setv(listener_right, right);
-}
-
-float Spatialize(vec3 origin, uint8_t *left_vol, uint8_t *right_vol)
-{
-    vec3 source_vec;
-
-    const float dist_mult=1.0f/500.0f;
-
-    // Distance from listener to sound source
-    Vec3_Setv(source_vec, origin);
-    Vec3_Subv(source_vec, listener_origin);
-
-    float dist=(Vec3_Normalize(source_vec)-MAX_VOLUME)*dist_mult;
-
-    // Clamp to full volume
-    if(dist<0.0f)
-        dist=0.0f;
-
-    // Calc angle from listener to sound source
-    return acosf(Vec3_Dot(listener_right, source_vec))*DEG2RAD;
-
-    // Factor scale for left and right channels
-    //float lscale=0.5f*(1.0f-dot);
-    //float rscale=0.5f*(1.0f+dot);
-
-    //// Distance attenuation
-    //*left_vol=(uint8_t)(max((1.0f-dist)*lscale, 0.0f)*MAX_VOLUME);
-    //*right_vol=(uint8_t)(max((1.0f-dist)*rscale, 0.0f)*MAX_VOLUME);
-}
-
-// Mix samples
-// result=(a+b)-(a*b)
-// https://atastypixel.com/how-to-mix-audio-samples-properly-on-ios/
-int16_t MixSamples(int16_t a, int16_t b, uint8_t volume)
-{
-    b=(b*volume)/MAX_VOLUME;
-
-    //if(a<0&&b<0)
-    //    return (a+b)-((a*b)/INT16_MIN);
-    //else if(a>0&&b>0)
-    //    return (a+b)-((a*b)/INT16_MAX);
-
-    // Why isn't this clipping now, it was before?
-    return a+b;
-}
-
 // HRTF samples and buffers for intepolated values
-extern HRTF_t hrtf[AZIMUTH_CNT];
-Complex_t hrtf_intepolate_l[FFT_SAMPLES];
-Complex_t hrtf_intepolate_r[FFT_SAMPLES];
+extern HRIR_Sphere_t Sphere;
+float hrir_l[NUM_SAMPLES], hrir_r[NUM_SAMPLES];
+int16_t sample_l[NUM_SAMPLES], sample_r[NUM_SAMPLES];
 
-// Incoming sample in time domain
-Complex_t sample_fft_time[FFT_SAMPLES];
-// Incoming sample in freq domain
-Complex_t sample_fft_freq[FFT_SAMPLES];
+void hrir_interpolate(vec3 xyz)
+{
+	for(uint32_t i=0;i<Sphere.SampleLength;i++)
+	{
+		float hrirSum_l=0.0f;
+		float hrirSum_r=0.0f;
+		float weightSum=0.0f;
 
-// Convolved stereo sample in freq domain
-Complex_t sample_fft_freq_l[FFT_SAMPLES];
-Complex_t sample_fft_freq_r[FFT_SAMPLES];
+		for(uint32_t j=0;j<Sphere.NumVertex;j++)
+		{
+			Vec3_Normalize(xyz);
 
-// Convolved stereo sample in time domain
-Complex_t sample_fft_time_l[FFT_SAMPLES];
-Complex_t sample_fft_time_r[FFT_SAMPLES];
+			float distance=Vec3_Distance(xyz, Sphere.Vertices[j].Vertex);
+			float weight=expf(-distance*distance);
+
+			hrirSum_l+=Sphere.Vertices[j].Left[i]*weight;
+			hrirSum_r+=Sphere.Vertices[j].Right[i]*weight;
+			weightSum+=weight;
+		}
+
+		weightSum=1.0f/weightSum;
+		hrir_l[i]=hrirSum_l*weightSum;
+		hrir_r[i]=hrirSum_r*weightSum;
+	}
+}
+
+void hrir_convolve(int16_t *audio_l, int16_t *audio_r, uint32_t audio_len, float *kernel_l, float *kernel_r)
+{
+	for(uint32_t i=0;i<audio_len;i++)
+	{
+		float left=0.0f;
+		float right=0.0f;
+
+		for(uint32_t j=0;j<Sphere.SampleLength;j++)
+		{
+			uint32_t offset=i+j;
+
+			if(offset<=audio_len)
+			{
+				left+=((float)audio_l[offset]/INT16_MAX)*kernel_l[j];
+				right+=((float)audio_r[offset]/INT16_MAX)*kernel_r[j];
+			}
+		}
+
+		audio_l[i]=(int16_t)(left*INT16_MAX);
+		audio_r[i]=(int16_t)(right*INT16_MAX);
+	}
+}
+
+#define FADE_LENGTH 441
+const float fade_factor=1.0f/FADE_LENGTH;
 
 // Callback function for when PortAudio needs more data.
 int paCallback(const void *inputBuffer, void *outputBuffer, unsigned long framesPerBuffer, const PaStreamCallbackTimeInfo *timeInfo, PaStreamCallbackFlags statusFlags, void *userData)
 {
-    // Get pointer to output buffer.
-    int16_t *out=(int16_t *)outputBuffer;
+	// Get pointer to output buffer.
+	int16_t *out=(int16_t *)outputBuffer;
 
-    // Clear the output buffer, so we don't get annoying repeating samples.
-    memset(out, 0, framesPerBuffer*sizeof(int16_t)*2);
+	// Clear the output buffer, so we don't get annoying repeating samples.
+	memset(out, 0, framesPerBuffer*sizeof(int16_t)*2);
 
-    for(int32_t i=0;i<MAX_CHANNELS;i++)
-    {
-        // Quality of life pointer to current mixing channel.
-        Channel_t *channel=&channels[i];
+	for(int32_t i=0;i<MAX_CHANNELS;i++)
+	{
+		// Quality of life pointer to current mixing channel.
+		Channel_t *channel=&channels[i];
 
-        // If the channel is empty, skip on the to next.
-        if(!channel->data)
-            continue;
+		// If the channel is empty, skip on the to next.
+		if(!channel->data)
+			continue;
 
-        // Calculate the remaining amount of data to process.
-        uint32_t remaining_data=(channel->len-channel->pos);
+		// Calculate the remaining amount of data to process.
+		uint32_t remaining_data=(channel->len-channel->pos);
 
-        // Remaining data runs off end of primary buffer.
-        // Clamp it to buffer size, we'll get the rest later.
-        if(remaining_data>framesPerBuffer)
-            remaining_data=framesPerBuffer;
+		// Remaining data runs off end of primary buffer.
+		// Clamp it to buffer size, we'll get the rest later.
+		if(remaining_data>=framesPerBuffer)
+			remaining_data=framesPerBuffer;
 
-        // FFT the incoming audio sample from time to frequency domain
-        for(uint32_t j=0;j<FFT_SAMPLES;j++)
-        {
-            if(j<remaining_data)
-                sample_fft_time[j].r=(float)channel->data[channel->pos+j]/INT16_MAX;
-            else
-                sample_fft_time[j].r=0.0f;
+		hrir_interpolate(channel->xyz);
 
-            sample_fft_time[j].i=0.0f;
-        }
+		// Duplicate the channel's remaining samples into buffers to process
+		memset(sample_l, 0, sizeof(int16_t)*NUM_SAMPLES);
+		memcpy(sample_l, &channel->data[channel->pos], sizeof(int16_t)*remaining_data);
 
-        fft(sample_fft_time, sample_fft_freq, FFT_SAMPLES, 1);
+		memset(sample_r, 0, sizeof(int16_t)*NUM_SAMPLES);
+		memcpy(sample_r, &channel->data[channel->pos], sizeof(int16_t)*remaining_data);
 
-        // Get the degree from listener to sound producer
-        float degree=fmodf(360.0f-(Spatialize(channel->xyz, NULL, NULL)-90.0f), 360.0f);
+		// Convolve those samples with the HRIR sample
+		hrir_convolve(sample_l, sample_r, remaining_data, hrir_l, hrir_r);
 
-        // Find the nearest upper and lower degrees and intepolate between them (is this really needed?)
-        int azimuth1=abs((int)floor(degree/AZIMUTH_INCREMENT_DEGREES));
-        int azimuth2=abs((int)ceil(degree/AZIMUTH_INCREMENT_DEGREES));
-        float delta=(degree/AZIMUTH_INCREMENT_DEGREES)-azimuth1;
+		// Mix out the samples into the output buffer
+		for(uint32_t j=0; j<remaining_data; j++)
+		{
+			// Calculate the current volume for this sample
+			float gain=1.0f;
 
-        for(uint32_t j=0;j<FFT_SAMPLES;j++)
-        {
-            HRTF_t *data1=&hrtf[azimuth1];
-            HRTF_t *data2=&hrtf[azimuth2%AZIMUTH_CNT];
+			if(j<FADE_LENGTH)
+				gain=(float)j*fade_factor;
+			else if(j>remaining_data-FADE_LENGTH)
+				gain=(float)(remaining_data-j)*fade_factor;
 
-            Lerp(data1->hrtf_l[j].r, data2->hrtf_l[j].r, delta, &hrtf_intepolate_l[j].r);
-            Lerp(data1->hrtf_l[j].i, data2->hrtf_l[j].i, delta, &hrtf_intepolate_l[j].i);
+			(*out++)+=(int16_t)(sample_l[j]*gain);
+			(*out++)+=(int16_t)(sample_r[j]*gain);
+		}
 
-            Lerp(data1->hrtf_r[j].r, data2->hrtf_r[j].r, delta, &hrtf_intepolate_r[j].r);
-            Lerp(data1->hrtf_r[j].i, data2->hrtf_r[j].i, delta, &hrtf_intepolate_r[j].i);
-        }
+		// Advance the sample position by what we've used, next time around will take another chunk.
+		channel->pos+=remaining_data;
 
-        // Convolve the mono audio sample in frequency domain with the HRTF sample in frequency domain
-        for(uint32_t j=0;j<FFT_SAMPLES;j++)
-        {
-            sample_fft_freq_l[j].r=(sample_fft_freq[j].r*hrtf_intepolate_l[j].r)-(sample_fft_freq[j].i*hrtf_intepolate_l[j].i);
-            sample_fft_freq_l[j].i=(sample_fft_freq[j].r*hrtf_intepolate_l[j].i)+(sample_fft_freq[j].i*hrtf_intepolate_l[j].r);
+		// Reset output buffer pointer for next channel to process.
+		out=(int16_t *)outputBuffer;
 
-            sample_fft_freq_r[j].r=(sample_fft_freq[j].r*hrtf_intepolate_r[j].r)-(sample_fft_freq[j].i*hrtf_intepolate_r[j].i);
-            sample_fft_freq_r[j].i=(sample_fft_freq[j].r*hrtf_intepolate_r[j].i)+(sample_fft_freq[j].i*hrtf_intepolate_r[j].r);
-        }
+		// If loop flag was set, reset position to 0 if it's at the end.
+		if(channel->pos==channel->len)
+		{
+			if(channel->looping)
+				channel->pos=0;
+			else
+			{
+				// DO STUFF TO REMOVE
+				channel->data=NULL;
+				channel->pos=0;
+				channel->len=0;
+				channel->looping=false;
+				channel->xyz=Zero;
+			}
+		}
+	}
 
-        // Take the convoluted sample from freqency back into time domain
-        fft(sample_fft_freq_l, sample_fft_time_l, FFT_SAMPLES, -1);
-        fft(sample_fft_freq_r, sample_fft_time_r, FFT_SAMPLES, -1);
-
-        // Mix out the time domain sample into the output buffer.
-        // This works, but not well... Needs a better mix function.
-        for(uint32_t j=0;j<remaining_data;j++)
-        {
-            int16_t input_sampleL=(int16_t)((sample_fft_time_l[j].r/FFT_SAMPLES)*INT16_MAX);
-            int16_t input_sampleR=(int16_t)((sample_fft_time_r[j].r/FFT_SAMPLES)*INT16_MAX);
-            int16_t output_sampleL=*out+0;
-            int16_t output_sampleR=*out+1;
-            *out++=MixSamples(output_sampleL, input_sampleL, MAX_VOLUME);
-            *out++=MixSamples(output_sampleR, input_sampleR, MAX_VOLUME);
-        }
-
-        // Transfer/process what we can.
-        //for(uint32_t j=0;j<remaining_data;j++)
-        //{
-        //    int16_t input_sample=channel->data[channel->pos+j];
-        //    int16_t output_sampleL=*out+0;
-        //    int16_t output_sampleR=*out+1;
-        //    uint8_t left=0, right=0;
-
-        //    Spatialize(channel->xyz, &left, &right);
-
-        //    *out++=MixSamples(output_sampleL, input_sample, left);
-        //    *out++=MixSamples(output_sampleR, input_sample, right);
-        //}
-
-        // Advance the sample position by what we've used, next time around will take another chunk.
-        channel->pos+=remaining_data;
-
-        // Reset output buffer pointer for next channel to process.
-        out=(int16_t *)outputBuffer;
-
-        // If loop flag was set, reset position to 0 if it's at the end.
-        if(channel->pos==channel->len)
-        {
-            if(channel->looping)
-                channel->pos=0;
-            else
-            {
-                // DO STUFF TO REMOVE
-                channel->data=NULL;
-                channel->pos=0;
-                channel->len=0;
-                channel->looping=false;
-                channel->xyz=Zero;
-            }
-        }
-    }
-
-    return paContinue;
+	return paContinue;
 }
 
 // Add a sound to first open channel.
 void Audio_PlaySample(Sample_t *Sample, bool looping)
 {
-    int32_t index;
+	int32_t index;
 
-    // Look for an empty sound channel slot.
-    for(index=0;index<MAX_CHANNELS;index++)
-    {
-        // If it's either done playing or is still the initial zero.
-        if(channels[index].pos==channels[index].len)
-            break;
-    }
+	// Look for an empty sound channel slot.
+	for(index=0;index<MAX_CHANNELS;index++)
+	{
+		// If it's either done playing or is still the initial zero.
+		if(channels[index].pos==channels[index].len)
+			break;
+	}
 
-    // return if there aren't any channels available.
-    if(index>=MAX_CHANNELS)
-        return;
+	// return if there aren't any channels available.
+	if(index>=MAX_CHANNELS)
+		return;
 
-    // otherwise set the channel's data pointer to this sample's pointer
-    // and set the length, reset play position, and loop flag.
-    channels[index].data=Sample->data;
-    channels[index].len=Sample->len;
-    channels[index].pos=0;
-    channels[index].looping=looping;
-    channels[index].xyz=Sample->xyz;
+	// otherwise set the channel's data pointer to this sample's pointer
+	// and set the length, reset play position, and loop flag.
+	channels[index].data=Sample->data;
+	channels[index].len=Sample->len;
+	channels[index].pos=0;
+	channels[index].looping=looping;
+	channels[index].xyz=Sample->xyz;
+}
+
+void Audio_StopSample(Sample_t *Sample)
+{
+	int32_t index;
+
+	// Search for the sample in the channels list
+	for(index=0;index<MAX_CHANNELS;index++)
+	{
+		if(channels[index].data==Sample->data)
+			break;
+	}
+
+	// return if it didn't find the sample
+	if(index>=MAX_CHANNELS)
+		return;
+
+	// Set the position to the end and allow the callback to resolve the removal
+	channels[index].pos=channels[index].len-1;
+	channels[index].looping=false;
 }
 
 int Audio_Init(void)
 {
-    PaStreamParameters outputParameters;
+	PaStreamParameters outputParameters;
 
-    // Clear out mixing channels
-    for(int i=0;i<MAX_CHANNELS;i++)
-    {
-        channels[i].data=NULL;
-        channels[i].pos=0;
-        channels[i].len=0;
-        channels[i].looping=false;
-        channels[i].xyz=Zero;
-    }
+	// Clear out mixing channels
+	for(int i=0;i<MAX_CHANNELS;i++)
+	{
+		channels[i].data=NULL;
+		channels[i].pos=0;
+		channels[i].len=0;
+		channels[i].looping=false;
+		channels[i].xyz=Zero;
+	}
 
-    // Initialize PortAudio
-    if(Pa_Initialize()!=paNoError)
-    {
-        DBGPRINTF("Audio: PortAudio failed to initialize.\n");
-        return false;
-    }
+	// Initialize PortAudio
+	if(Pa_Initialize()!=paNoError)
+	{
+		DBGPRINTF("Audio: PortAudio failed to initialize.\n");
+		return false;
+	}
 
-    // Set up output device parameters
-    outputParameters.device=Pa_GetDefaultOutputDevice();
+	// Set up output device parameters
+	outputParameters.device=Pa_GetDefaultOutputDevice();
 
-    if(outputParameters.device==paNoDevice)
-    {
-        DBGPRINTF("Audio: No default output device.\n");
-        Pa_Terminate();
-        return false;
-    }
+	if(outputParameters.device==paNoDevice)
+	{
+		DBGPRINTF("Audio: No default output device.\n");
+		Pa_Terminate();
+		return false;
+	}
 
-    outputParameters.channelCount=2;
-    outputParameters.sampleFormat=paInt16;
-    outputParameters.suggestedLatency=Pa_GetDeviceInfo(outputParameters.device)->defaultLowOutputLatency;
-    outputParameters.hostApiSpecificStreamInfo=NULL;
+	outputParameters.channelCount=2;
+	outputParameters.sampleFormat=paInt16;
+	outputParameters.suggestedLatency=Pa_GetDeviceInfo(outputParameters.device)->defaultLowOutputLatency;
+	outputParameters.hostApiSpecificStreamInfo=NULL;
 
-    // Open audio stream
-    if(Pa_OpenStream(&stream, NULL, &outputParameters, SAMPLE_RATE, NUM_SAMPLES, paNoFlag, paCallback, NULL)!=paNoError)
-    {
-        DBGPRINTF("Audio: Unable to open PortAudio stream.\n");
-        Pa_Terminate();
-        return false;
-    }
+	// Open audio stream
+	if(Pa_OpenStream(&stream, NULL, &outputParameters, SAMPLE_RATE, NUM_SAMPLES, paNoFlag, paCallback, NULL)!=paNoError)
+	{
+		DBGPRINTF("Audio: Unable to open PortAudio stream.\n");
+		Pa_Terminate();
+		return false;
+	}
 
-    // Start audio stream
-    if(Pa_StartStream(stream)!=paNoError)
-    {
-        DBGPRINTF("Audio: Unable to start PortAudio Stream.\n");
-        Pa_Terminate();
-        return false;
-    }
+	// Start audio stream
+	if(Pa_StartStream(stream)!=paNoError)
+	{
+		DBGPRINTF("Audio: Unable to start PortAudio Stream.\n");
+		Pa_Terminate();
+		return false;
+	}
 
-    return true;
+	return true;
 }
 
 void Audio_Destroy(void)
 {
-    // Shut down PortAudio
-    Pa_AbortStream(stream);
-    Pa_StopStream(stream);
-    Pa_CloseStream(stream);
-    Pa_Terminate();
+	// Shut down PortAudio
+	Pa_AbortStream(stream);
+	Pa_StopStream(stream);
+	Pa_CloseStream(stream);
+	Pa_Terminate();
 }

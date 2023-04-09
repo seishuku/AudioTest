@@ -13,20 +13,31 @@ typedef struct
 } Sample_t;
 
 bool Audio_LoadStatic(char *Filename, Sample_t *Sample);
-void Audio_SetListenerOrigin(vec3 pos, vec3 right);
+void Audio_SetListenerOrigin(vec3 pos, vec3 right, vec3 up);
 void Audio_PlaySample(Sample_t *Sample, bool looping);
+void Audio_StopSample(Sample_t *Sample);
 int Audio_Init(void);
 void Audio_Destroy(void);
 
-#define AZIMUTH_CNT 72
-#define AZIMUTH_INCREMENT_DEGREES 5
-
-#define FFT_SAMPLES (NUM_SAMPLES*4)
+typedef struct
+{
+	vec3 Vertex;
+	float Left[NUM_SAMPLES], Right[NUM_SAMPLES];
+} HRIR_Vertex_t;
 
 typedef struct
 {
-    Complex_t *hrtf_l;
-    Complex_t *hrtf_r;
-} HRTF_t;
+	uint32_t Magic;
+	uint32_t SampleRate;
+	uint32_t SampleLength;
+	uint32_t NumVertex;
+	uint32_t NumIndex;
+	uint32_t *Indices;
+	HRIR_Vertex_t *Vertices;
+} HRIR_Sphere_t;
+
+#define HRIR_MAGIC ('H'|('R'<<8)|('I'<<16)|('R'<<24))
+
+bool init_hrtf(void);
 
 #endif

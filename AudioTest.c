@@ -17,84 +17,115 @@ Sample_t TestSound2;
 Sample_t TestSound3;
 Sample_t TestSound4;
 
+extern float Azimuth, Elevation;
+
+bool MakeSinewave(Sample_t *Sample, const float Frequency, const float Length)
+{
+	const uint32_t samplesPerSec=44100;
+	const uint32_t samplesLength=(uint32_t)(samplesPerSec*Length);
+
+	Sample->pos=0;
+	Sample->len=samplesLength;
+	Sample->channels=1;
+	Vec3_Sets(Sample->xyz, 0.0f);
+
+	Sample->data=malloc(samplesLength*sizeof(int16_t));
+
+	if(Sample->data==NULL)
+		return false;
+
+	for(uint32_t i=0;i<samplesLength;i++)
+	{
+		float Time=(float)i/samplesPerSec;
+		Sample->data[i]=(int16_t)(sinf(Time*Frequency*2.0f*PI)*INT16_MAX);
+	}
+
+	return true;
+}
+
 int main(int argc, char **argv)
 {
-    int Done=0;
+	int Done=0;
 
-    // Bring up audio system
-    Audio_Init();
+	// Bring up audio system
+	Audio_Init();
 
-    // Load up some wave sounds
-    if(!Audio_LoadStatic("zombie_idle.wav", &TestSound1))
-        return -1;
+	// Load up some wave sounds
+	if(!MakeSinewave(&TestSound1, 440.0f, 1.0f))
+		return -1;
 
-    if(!Audio_LoadStatic("pinky_idle.wav", &TestSound2))
-        return -1;
+	if(!Audio_LoadStatic("pinky_idle.wav", &TestSound2))
+		return -1;
 
-    TestSound2.xyz[0]=0.01f;
-    TestSound2.xyz[1]=0.0f;
-    TestSound2.xyz[2]=-1.0f;
+	TestSound2.xyz[0]=-1.0f;
+	TestSound2.xyz[1]=0.0f;
+	TestSound2.xyz[2]=-1.0f;
 
-    if(!Audio_LoadStatic("pinky_idle.wav", &TestSound3))
-        return -1;
+	if(!Audio_LoadStatic("pinky_idle.wav", &TestSound3))
+		return -1;
 
-    TestSound3.xyz[0]=0.01f;
-    TestSound3.xyz[1]=0.0f;
-    TestSound3.xyz[2]=1.0f;
+	TestSound3.xyz[0]=1.0f;
+	TestSound3.xyz[1]=0.0f;
+	TestSound3.xyz[2]=1.0f;
 
-    if(!Audio_LoadStatic("beep-3.wav", &TestSound4))
-        return -1;
+	if(!Audio_LoadStatic("beep-3.wav", &TestSound4))
+		return -1;
 
-    init_hrtf();
+	TestSound4.xyz[0]=0.0f;
+	TestSound4.xyz[1]=0.0f;
+	TestSound4.xyz[2]=1.0f;
 
-    float time=0.0f;
+	init_hrtf();
 
-    // Loop around, waiting for a key press
-    while(!Done)
-    {
-        TestSound1.xyz[0]=sinf(time);
-        TestSound1.xyz[1]=0.0f;
-        TestSound1.xyz[2]=cosf(time);
-        time+=0.0001f;
+	float time=0.0f;
 
-        if(kbhit())
-        {
-            switch(getch())
-            {
-                case 'q':
-                    Done=1;
-                    break;
+	// Loop around, waiting for a key press
+	while(!Done)
+	{
+		TestSound1.xyz[0]=sinf(time);
+		TestSound1.xyz[1]=0.0f;
+		TestSound1.xyz[2]=cosf(time);
 
-                case '1':
-                    Audio_PlaySample(&TestSound1, true);
-                    break;
+		time+=0.0001f;
 
-                case '2':
-                    Audio_PlaySample(&TestSound2, false);
-                    break;
+		if(kbhit())
+		{
+			switch(getch())
+			{
+				case 'q':
+					Done=1;
+					break;
 
-                case '3':
-                    Audio_PlaySample(&TestSound3, false);
-                    break;
+				case '1':
+					Audio_PlaySample(&TestSound1, false);
+					break;
 
-                case '4':
-                    Audio_PlaySample(&TestSound4, false);
-                    break;
+				case '2':
+					Audio_PlaySample(&TestSound2, false);
+					break;
 
-                default:
-                    break;
-            }
-        }
-    }
+				case '3':
+					Audio_PlaySample(&TestSound3, false);
+					break;
 
-    // Shut down audio system
-    Audio_Destroy();
+				case '4':
+					Audio_PlaySample(&TestSound4, false);
+					break;
 
-    // Clean up audio samples
-    FREE(TestSound1.data);
-    FREE(TestSound2.data);
-    FREE(TestSound3.data);
-    FREE(TestSound4.data);
+				default:
+					break;
+			}
+		}
+	}
+
+	// Shut down audio system
+	Audio_Destroy();
+
+	// Clean up audio samples
+	FREE(TestSound1.data);
+	FREE(TestSound2.data);
+	FREE(TestSound3.data);
+	FREE(TestSound4.data);
 
 	return 0;
 }
