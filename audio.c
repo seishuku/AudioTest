@@ -23,17 +23,20 @@ typedef struct
 	uint32_t pos, len;
 	bool looping;
 	float *xyz;
+	int16_t working[NUM_SAMPLES*2];
 } Channel_t;
 
 vec3 Zero={ 0.0f, 0.0f, 0.0f };
 
 Channel_t channels[MAX_CHANNELS];
 
-// HRTF samples and buffers for intepolated values
+// HRTF samples and buffers for interpolated values
 extern HRIR_Sphere_t Sphere;
 float hrir_l[NUM_SAMPLES], hrir_r[NUM_SAMPLES];
 int16_t sample_l[NUM_SAMPLES], sample_r[NUM_SAMPLES];
 
+// This function is very naive, it just interpolates *all* the HRIR positions
+//   and weights then according to whatever is closest to the position.
 void hrir_interpolate(vec3 xyz)
 {
 	for(uint32_t i=0;i<Sphere.SampleLength;i++)
@@ -60,31 +63,25 @@ void hrir_interpolate(vec3 xyz)
 	}
 }
 
-void hrir_convolve(int16_t *audio_l, int16_t *audio_r, uint32_t audio_len, float *kernel_l, float *kernel_r)
+void convolve(int16_t *input, int16_t *audio_l, int16_t *audio_r, size_t audio_len, float *kernel_l, float *kernel_r, size_t kernel_len)
 {
-	for(uint32_t i=0;i<audio_len;i++)
+	for(size_t i=0;i<audio_len;i++)
 	{
-		float left=0.0f;
-		float right=0.0f;
+		float sum_l=0;
+		float sum_r=0;
 
-		for(uint32_t j=0;j<Sphere.SampleLength;j++)
+		for(size_t j=0;j<kernel_len;j++)
 		{
-			uint32_t offset=i+j;
+			size_t offset=i+j;
 
-			if(offset<=audio_len)
-			{
-				left+=((float)audio_l[offset]/INT16_MAX)*kernel_l[j];
-				right+=((float)audio_r[offset]/INT16_MAX)*kernel_r[j];
-			}
+			sum_l+=((float)input[offset]/INT16_MAX)*kernel_l[kernel_len-1-j];
+			sum_r+=((float)input[offset]/INT16_MAX)*kernel_r[kernel_len-1-j];
 		}
 
-		audio_l[i]=(int16_t)(left*INT16_MAX);
-		audio_r[i]=(int16_t)(right*INT16_MAX);
+		audio_l[i]=(int16_t)(sum_l*INT16_MAX);
+		audio_r[i]=(int16_t)(sum_r*INT16_MAX);
 	}
 }
-
-#define FADE_LENGTH 441
-const float fade_factor=1.0f/FADE_LENGTH;
 
 // Callback function for when PortAudio needs more data.
 int paCallback(const void *inputBuffer, void *outputBuffer, unsigned long framesPerBuffer, const PaStreamCallbackTimeInfo *timeInfo, PaStreamCallbackFlags statusFlags, void *userData)
@@ -95,7 +92,7 @@ int paCallback(const void *inputBuffer, void *outputBuffer, unsigned long frames
 	// Clear the output buffer, so we don't get annoying repeating samples.
 	memset(out, 0, framesPerBuffer*sizeof(int16_t)*2);
 
-	for(int32_t i=0;i<MAX_CHANNELS;i++)
+	for(uint32_t i=0;i<MAX_CHANNELS;i++)
 	{
 		// Quality of life pointer to current mixing channel.
 		Channel_t *channel=&channels[i];
@@ -105,38 +102,41 @@ int paCallback(const void *inputBuffer, void *outputBuffer, unsigned long frames
 			continue;
 
 		// Calculate the remaining amount of data to process.
-		uint32_t remaining_data=(channel->len-channel->pos);
+		uint32_t remaining_data=channel->len-channel->pos;
 
 		// Remaining data runs off end of primary buffer.
 		// Clamp it to buffer size, we'll get the rest later.
 		if(remaining_data>=framesPerBuffer)
 			remaining_data=framesPerBuffer;
 
+		// Interpolate HRIR samples that are closest to the sound's position
+		// TODO: this needs work, it works, but not great
 		hrir_interpolate(channel->xyz);
 
-		// Duplicate the channel's remaining samples into buffers to process
-		memset(sample_l, 0, sizeof(int16_t)*NUM_SAMPLES);
-		memcpy(sample_l, &channel->data[channel->pos], sizeof(int16_t)*remaining_data);
+		// Calculate the amount to fill the convolution buffer.
+		// The convolve buffer needs to be at least NUM_SAMPLE+HRIR length,
+		//   but to stop annoying pops/clicks and other discontinuities, we need to copy ahead,
+		//   which is either the full input sample length OR the full buffer+HRIR sample length.
+		uint32_t toFill=(channel->len-channel->pos);
 
-		memset(sample_r, 0, sizeof(int16_t)*NUM_SAMPLES);
-		memcpy(sample_r, &channel->data[channel->pos], sizeof(int16_t)*remaining_data);
+		if(toFill>=(NUM_SAMPLES+Sphere.SampleLength))
+			toFill=(NUM_SAMPLES+Sphere.SampleLength);
+		else if(toFill>=channel->len)
+			toFill=channel->len;
 
-		// Convolve those samples with the HRIR sample
-		hrir_convolve(sample_l, sample_r, remaining_data, hrir_l, hrir_r);
+		// Zero out the full buffer size.
+		memset(channel->working, 0, NUM_SAMPLES*2*sizeof(int16_t));
+		// Copy the samples.
+		memcpy(channel->working, &channel->data[channel->pos], toFill*sizeof(int16_t));
+
+		// Convolve the samples with the interpolated HRIR sample to produce a stereo sample to mix into the output buffer
+		convolve(channel->working, sample_l, sample_r, remaining_data, hrir_l, hrir_r, Sphere.SampleLength);
 
 		// Mix out the samples into the output buffer
-		for(uint32_t j=0; j<remaining_data; j++)
+		for(uint32_t j=0;j<remaining_data;j++)
 		{
-			// Calculate the current volume for this sample
-			float gain=1.0f;
-
-			if(j<FADE_LENGTH)
-				gain=(float)j*fade_factor;
-			else if(j>remaining_data-FADE_LENGTH)
-				gain=(float)(remaining_data-j)*fade_factor;
-
-			(*out++)+=(int16_t)(sample_l[j]*gain);
-			(*out++)+=(int16_t)(sample_r[j]*gain);
+			(*out++)+=sample_l[j];
+			(*out++)+=sample_r[j];
 		}
 
 		// Advance the sample position by what we've used, next time around will take another chunk.

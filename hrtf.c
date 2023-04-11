@@ -13,7 +13,7 @@ bool init_hrtf(void)
 {
 	FILE *Stream=NULL;
 
-	Stream=fopen("IRC_1008_C.bin", "rb");
+	Stream=fopen("./hrir/IRC_1008_C.bin", "rb");
 
 	if(!Stream)
 		return false;
